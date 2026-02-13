@@ -29,9 +29,10 @@ logging.getLogger("LiteLLM").setLevel(logging.CRITICAL)
 
 DB_PATH = "crawl_state.db"
 START_URL = "https://rclone.org/"
-ALLOWED_DOMAINS = ["rclone.org", "forum.rclone.org", "pub.rclone.org"]
+ALLOWED_DOMAINS = ["rclone.org", "forum.rclone.org"]
 OUTPUT_DIR = "extracted_data"
 EXCLUDED_EXTENSIONS = ('.txt', '.bin', '.exe', '.zip', '.tar.gz', '.rpm', '.deb', '.iso', '.img', '.dmg', '.pkg', '.msi', '.pdf', '.png', '.jpg', '.jpeg', '.gif', '.svg')
+BLACKLIST_PATTERNS = ["/fix-", "/integration-tests/", "/v1.", "/v1_", "beta.rclone.org", "pub.rclone.org"]
 
 if not os.path.exists(OUTPUT_DIR):
     os.makedirs(OUTPUT_DIR)
@@ -106,9 +107,12 @@ async def crawl_rclone():
 
             url, depth = row
             
-            # [PRE-FETCH SKIP] Skip logs/binaries already in the DB queue
-            if url.lower().endswith(EXCLUDED_EXTENSIONS):
-                logger.info(f"Skipping excluded file type: {url}")
+            # [PRE-FETCH SKIP] Skip logs/binaries/noise already in the DB queue
+            is_excluded_ext = url.lower().endswith(EXCLUDED_EXTENSIONS)
+            is_blacklisted = any(pattern in url.lower() for pattern in BLACKLIST_PATTERNS)
+            
+            if is_excluded_ext or is_blacklisted:
+                logger.info(f"Skipping noise/excluded URL: {url}")
                 state.update_status(url, "skipped")
                 continue
 
@@ -158,8 +162,9 @@ async def crawl_rclone():
                                                        for domain in ALLOWED_DOMAINS)
                                         
                                         is_valid_type = not full_url.lower().endswith(EXCLUDED_EXTENSIONS)
+                                        is_not_blacklisted = not any(pattern in full_url.lower() for pattern in BLACKLIST_PATTERNS)
                                         
-                                        if is_allowed and is_valid_type:
+                                        if is_allowed and is_valid_type and is_not_blacklisted:
                                             state.add_url(full_url, depth + 1)
                                 except Exception as e:
                                     logger.error(f"Error discovering links on {url}: {e}")
