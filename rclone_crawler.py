@@ -32,7 +32,7 @@ START_URL = "https://rclone.org/"
 ALLOWED_DOMAINS = ["rclone.org", "forum.rclone.org"]
 OUTPUT_DIR = "extracted_data"
 EXCLUDED_EXTENSIONS = ('.txt', '.bin', '.exe', '.zip', '.tar.gz', '.rpm', '.deb', '.iso', '.img', '.dmg', '.pkg', '.msi', '.pdf', '.png', '.jpg', '.jpeg', '.gif', '.svg')
-BLACKLIST_PATTERNS = ["/fix-", "/integration-tests/", "/v1.", "/v1_", "beta.rclone.org", "pub.rclone.org"]
+BLACKLIST_PATTERNS = ["/fix-", "/integration-tests/", "/v1.", "/v1_", "beta.rclone.org", "pub.rclone.org","downloads.rclone.org"]
 
 if not os.path.exists(OUTPUT_DIR):
     os.makedirs(OUTPUT_DIR)
