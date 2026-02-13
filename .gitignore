@@ -1,0 +1,6 @@
+crawl_state.db
+extracted_data/
+__pycache__/
+.venv/
+.env
+*.log
