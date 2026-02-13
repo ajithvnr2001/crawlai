@@ -9,10 +9,11 @@ CrawlAI is built on top of `crawl4ai` and `Playwright` to provide a robust solut
 ### Key Features
 
 - **Recursive Crawling**: Automatically discovers and follows links within allowed domains.
+- **Intelligent Filtering**: Automatically skips non-HTML files (logs, binaries, images, etc.) to focus on documentation.
+- **Navigation Resilience**: Gracefully handles HTTP 404/5xx errors and navigation failures without crashing.
 - **Deep Extraction**: Uses Gemini 2.5 Flash Lite to extract 'title', 'main_content', and 'category' from every page.
-- **Resilient Stateful Crawl**: Uses an SQLite database to track 'pending', 'processing', 'completed', and 'failed' URLs, allowing for easy resumes after crashes or interruptions.
-- **Zero-Logging Noise**: Includes custom monkeypatching for `litellm` to bypass known library bugs and provide a clean terminal experience.
-- **Dual Export**: Saves every page as a structured JSON file and a full raw Markdown file for maximum data retention.
+- **Resilient Stateful Crawl**: Uses an SQLite database to track progress, allowing for easy resumes.
+- **Zero-Logging Noise**: Includes custom monkeypatching for `litellm` for a clean terminal experience.
 
 ## How It Works
 

@@ -29,8 +29,9 @@ logging.getLogger("LiteLLM").setLevel(logging.CRITICAL)
 
 DB_PATH = "crawl_state.db"
 START_URL = "https://rclone.org/"
-ALLOWED_DOMAINS = ["rclone.org", "forum.rclone.org"]
+ALLOWED_DOMAINS = ["rclone.org", "forum.rclone.org", "pub.rclone.org"]
 OUTPUT_DIR = "extracted_data"
+EXCLUDED_EXTENSIONS = ('.txt', '.bin', '.exe', '.zip', '.tar.gz', '.rpm', '.deb', '.iso', '.img', '.dmg', '.pkg', '.msi', '.pdf', '.png', '.jpg', '.jpeg', '.gif', '.svg')
 
 if not os.path.exists(OUTPUT_DIR):
     os.makedirs(OUTPUT_DIR)
@@ -97,78 +98,110 @@ async def crawl_rclone():
     )
 
     try:
-        async with AsyncWebCrawler(config=browser_config) as crawler:
-            while True:
-                row = state.get_pending_url()
-                if not row:
-                    logger.info("No more pending URLs. Crawl complete.")
-                    break
+        while True:
+            row = state.get_pending_url()
+            if not row:
+                logger.info("No more pending URLs. Crawl complete.")
+                break
 
-                url, depth = row
-                logger.info(f"Crawling: {url} (Depth: {depth})")
-                state.update_status(url, "processing")
+            url, depth = row
+            
+            # [PRE-FETCH SKIP] Skip logs/binaries already in the DB queue
+            if url.lower().endswith(EXCLUDED_EXTENSIONS):
+                logger.info(f"Skipping excluded file type: {url}")
+                state.update_status(url, "skipped")
+                continue
 
-                try:
-                    result = await crawler.arun(url=url, config=run_config)
-                    
-                    if result.success:
-                        # Save clean content (JSON from extraction strategy)
+            try:
+                async with AsyncWebCrawler(config=browser_config) as crawler:
+                    while True:
+                        # Inner loop to process multiple URLs per browser session for performance
+                        logger.info(f"Crawling: {url} (Depth: {depth})")
+                        state.update_status(url, "processing")
+
                         try:
-                            content_data = json.loads(result.extracted_content)
-                        except Exception as e:
-                            logger.error(f"Error parsing extracted content for {url}: {e}")
-                            content_data = {"raw_markdown": result.markdown}
+                            result = await crawler.arun(url=url, config=run_config)
+                            
+                            if result.success:
+                                # Save clean content (JSON from extraction strategy)
+                                try:
+                                    content_data = json.loads(result.extracted_content)
+                                except Exception as e:
+                                    logger.error(f"Error parsing extracted content for {url}: {e}")
+                                    content_data = {"raw_markdown": result.markdown}
 
-                        base_filename = url.replace("https://", "").replace("/", "_").replace(".", "_")
-                        
-                        # Save JSON
-                        json_path = os.path.join(OUTPUT_DIR, base_filename + ".json")
-                        with open(json_path, "w", encoding="utf-8") as f:
-                            json.dump(content_data, f, indent=2)
-                        
-                        # Save Markdown (Full raw markdown to ensure no word is missed)
-                        md_path = os.path.join(OUTPUT_DIR, base_filename + ".md")
-                        with open(md_path, "w", encoding="utf-8") as f:
-                            f.write(result.markdown)
-                        
-                        # Discover links
-                        try:
-                            soup = BeautifulSoup(result.html, 'html.parser')
-                            for a in soup.find_all('a', href=True):
-                                # Clean and resolve the URL
-                                raw_href = a['href'].split('#')[0].split('?')[0].strip().rstrip('/')
-                                if not raw_href or raw_href.startswith(('mailto:', 'tel:', 'javascript:')):
-                                    continue
-                                    
-                                full_url = urljoin(url, raw_href)
-                                parsed_uri = urlparse(full_url)
+                                base_filename = url.replace("https://", "").replace("/", "_").replace(".", "_")
                                 
-                                # Filter for rclone domains
-                                is_allowed = any(domain == parsed_uri.netloc or parsed_uri.netloc.endswith('.' + domain) 
-                                               for domain in ALLOWED_DOMAINS)
+                                # Save JSON
+                                json_path = os.path.join(OUTPUT_DIR, base_filename + ".json")
+                                with open(json_path, "w", encoding="utf-8") as f:
+                                    json.dump(content_data, f, indent=2)
                                 
-                                if is_allowed:
-                                    state.add_url(full_url, depth + 1)
+                                # Save Markdown
+                                md_path = os.path.join(OUTPUT_DIR, base_filename + ".md")
+                                with open(md_path, "w", encoding="utf-8") as f:
+                                    f.write(result.markdown)
+                                
+                                # Discover links
+                                try:
+                                    soup = BeautifulSoup(result.html, 'html.parser')
+                                    for a in soup.find_all('a', href=True):
+                                        raw_href = a['href'].split('#')[0].split('?')[0].strip().rstrip('/')
+                                        if not raw_href or raw_href.startswith(('mailto:', 'tel:', 'javascript:')):
+                                            continue
+                                            
+                                        full_url = urljoin(url, raw_href)
+                                        parsed_uri = urlparse(full_url)
+                                        
+                                        # Filter for rclone domains and skip binaries/logs
+                                        is_allowed = any(domain == parsed_uri.netloc or parsed_uri.netloc.endswith('.' + domain) 
+                                                       for domain in ALLOWED_DOMAINS)
+                                        
+                                        is_valid_type = not full_url.lower().endswith(EXCLUDED_EXTENSIONS)
+                                        
+                                        if is_allowed and is_valid_type:
+                                            state.add_url(full_url, depth + 1)
+                                except Exception as e:
+                                    logger.error(f"Error discovering links on {url}: {e}")
+                                
+                                state.update_status(url, "completed")
+                                logger.info(f"Successfully crawled: {url}")
+                            else:
+                                # Handle deliberate failures (404, etc)
+                                logger.error(f"Extraction failed for {url}: {result.error_message}")
+                                state.update_status(url, "failed")
+
                         except Exception as e:
-                            logger.error(f"Error discovering links on {url}: {e}")
+                            # Handle unexpected page-level navigation errors
+                            logger.error(f"Page-level navigation failure for {url}: {e}")
+                            state.update_status(url, "failed")
+                            # If it's a fatal browser error, the 'async with' will likely raise it too
+
+                        # Get next URL for the SAME browser session
+                        await asyncio.sleep(1)
+                        row = state.get_pending_url()
+                        if not row:
+                            break
+                        url, depth = row
                         
-                        state.update_status(url, "completed")
-                        logger.info(f"Successfully crawled and extracted: {url}")
-                    else:
-                        logger.error(f"Failed to crawl {url}: {result.error_message}")
-                        state.update_status(url, "failed")
+                        # Pre-check again for the next URL
+                        if url.lower().endswith(EXCLUDED_EXTENSIONS):
+                            state.update_status(url, "skipped")
+                            # Need to get another one
+                            row = state.get_pending_url()
+                            if not row: break
+                            url, depth = row
 
-                except Exception as e:
-                    logger.error(f"Unexpected error crawling {url}: {e}")
-                    state.update_status(url, "failed")
-
-                # Small delay to be polite
-                await asyncio.sleep(1)
+            except Exception as e:
+                # Fatal browser error handler - allows the outer loop to RESTART the browser
+                logger.error(f"FATAL: Browser context crashed or failed to initialize: {e}")
+                logger.info("Attempting recovery in 5 seconds...")
+                await asyncio.sleep(5)
+                # The outer loop will call get_pending_url() and try again
     except Exception as e:
-        logger.error(f"Fatal crawler or browser error: {e}")
+        logger.error(f"Fatal error in crawl loop: {e}")
     finally:
-        # The 'async with' handles closure, but we might want to ensure a clean exit
-        logger.info("Crawler session closed.")
+        logger.info("Crawler finished.")
 
 if __name__ == "__main__":
     asyncio.run(crawl_rclone())
